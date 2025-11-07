@@ -1,4 +1,4 @@
-// Windows: BCryptGenRandom
+// Windows: BCryptGenRandom 사용
 #pragma comment(lib, "bcrypt.lib")
 
 #include "project_aes_win.h"
@@ -8,15 +8,15 @@
 #include <stdio.h>    
 #include <stdlib.h>   
 
-// Windows
+// Windows 헤더 포함
 #ifdef _WIN32
 #include <windows.h>
 #include <bcrypt.h>
 #endif
 
-// --- AES ---
+// --- AES 내부 함수 ---
 
-// S-box (256)
+// AES표준의 S-box (256바이트 테이블)
 static const byte sbox[256] = {
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -36,7 +36,7 @@ static const byte sbox[256] = {
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
 };
 
-// inv S-box
+// AES표준의 역 S-box
 static const byte inv_sbox[256] = {
     0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
     0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -64,7 +64,7 @@ static const word RCON[14] = {
     0xab000000, 0x4d000000
 };
 
-// ---  AES (static) ---
+// --- 내부 AES 함수 정의 (static) ---
 
 // SubBytes
 static void aes_subbytes(byte state[4][4]) {
@@ -75,7 +75,7 @@ static void aes_subbytes(byte state[4][4]) {
     }
 }
 
-// inv SubBytes
+// 역 SubBytes
 static void aes_inv_subbytes(byte state[4][4]) {
     for (int row = 0; row < 4; row++) {
         for (int col = 0; col < 4; col++) {
@@ -101,7 +101,7 @@ static void aes_shiftrows(byte state[4][4]) {
     state[3][0] = temp;
 }
 
-// inv ShiftRows
+// 역 ShiftRows
 static void aes_inv_shiftrows(byte state[4][4]) {
     byte temp;
     temp = state[1][3];
@@ -118,11 +118,13 @@ static void aes_inv_shiftrows(byte state[4][4]) {
     state[3][3] = temp;
 }
 
+// GF(2^8)에서 x*2 연산 함수
 static byte xtime(byte x) {
     // x*2 mod 0x11b
     return (x << 1) ^ ((x >> 7) ? 0x1b : 0x00);
 }
 
+// GF(2^8) 필드에서의 일반 곱셈 함수
 static byte gmul(byte a, byte b) {
     byte p = 0;
     byte counter;
@@ -147,6 +149,7 @@ static void aes_mixcolumns(byte state[4][4]) {
         byte a1 = state[1][col];
         byte a2 = state[2][col];
         byte a3 = state[3][col];
+        // MixColumns 행렬 곱셈
         state[0][col] = xtime(a0) ^ (xtime(a1) ^ a1) ^ a2 ^ a3;
         state[1][col] = a0 ^ xtime(a1) ^ (xtime(a2) ^ a2) ^ a3;
         state[2][col] = a0 ^ a1 ^ xtime(a2) ^ (xtime(a3) ^ a3);
@@ -154,13 +157,14 @@ static void aes_mixcolumns(byte state[4][4]) {
     }
 }
 
-// inv MixColumns
+// 역 MixColumns
 static void aes_inv_mixcolumns(byte state[4][4]) {
     for (int col = 0; col < 4; col++) {
         byte a0 = state[0][col];
         byte a1 = state[1][col];
         byte a2 = state[2][col];
         byte a3 = state[3][col];
+        // 역 MixColumns 행렬 곱셈(gmul 사용)
         state[0][col] = gmul(a0, 0x0e) ^ gmul(a1, 0x0b) ^ gmul(a2, 0x0d) ^ gmul(a3, 0x09);
         state[1][col] = gmul(a0, 0x09) ^ gmul(a1, 0x0e) ^ gmul(a2, 0x0b) ^ gmul(a3, 0x0d);
         state[2][col] = gmul(a0, 0x0d) ^ gmul(a1, 0x09) ^ gmul(a2, 0x0e) ^ gmul(a3, 0x0b);
@@ -171,6 +175,7 @@ static void aes_inv_mixcolumns(byte state[4][4]) {
 // AddRoundKey
 static void aes_addroundkey(const word* w, byte state[4][4], int round) {
     for (int col = 0; col < 4; col++) {
+        // 라운드 키가 w[round*4 + col]에 저장
         word k = w[round * 4 + col];
         state[0][col] ^= (byte)(k >> 24);
         state[1][col] ^= (byte)(k >> 16);
@@ -192,18 +197,23 @@ static word SubWord(word w) {
         (sbox[w & 0xFF]);
 }
 
+// 카운터 블록 구성 (nonce 8바이트 + counter 8바이트)
 static void construct_counter_block(byte counter_block[AES_BLOCK_SIZE], const byte* nonce, uint64_t counter) {
+    // 앞 8바이트 = nonce
     memcpy(counter_block, nonce, 8);
+    // 뒤 8바이트 = counter (little endian으로 처리되어 있으므로 그대로 사용)
+    // 리틀 엔디안 uint64_t를 바이트 배열로 변환할 때, 인덱스 0부터 7까지 순서대로 8바이트를 저장하는 방식으로 작성 (Little Endian)
     for (int i = 0; i < 8; i++) {
         counter_block[8 + i] = (byte)((counter >> (8 * i)) & 0xFF);
     }
 }
 
-// --- API ---
+// --- 공개 API 함수들 ---
 
+// 키 확장 함수 정의
 int aes_keyexpansion(const byte* key, word* w, size_t key_len) {
-    int Nk = (int)key_len / 4;           
-    int Nr;                               
+    int Nk = (int)key_len / 4;            // 키 길이(워드 단위)
+    int Nr;                               // 라운드 수
     if (Nk == AES_NK_128) Nr = AES_NR_128;
     else if (Nk == AES_NK_192) Nr = AES_NR_192;
     else if (Nk == AES_NK_256) Nr = AES_NR_256;
@@ -212,11 +222,13 @@ int aes_keyexpansion(const byte* key, word* w, size_t key_len) {
         return -1;
     }
 
+    // 처음 Nk개의 원래 키를 복사 저장 (Big Endian으로 저장)
     for (int i = 0; i < Nk; i++) {
         w[i] = ((word)key[4 * i] << 24) | ((word)key[4 * i + 1] << 16) |
             ((word)key[4 * i + 2] << 8) | (word)key[4 * i + 3];
     }
 
+    // 나머지 라운드 키 생성
     for (int i = Nk; i < 4 * (Nr + 1); i++) {
         word temp = w[i - 1];
         if (i % Nk == 0) {
@@ -224,6 +236,7 @@ int aes_keyexpansion(const byte* key, word* w, size_t key_len) {
             temp = SubWord(RotWord(temp)) ^ RCON[(i / Nk) - 1];
         }
         else if (Nk > 6 && (i % Nk == 4)) {
+            // AES-256 경우: 4번째 워드-1 위치에서 SubWord 추가 처리
             temp = SubWord(temp);
         }
         w[i] = w[i - Nk] ^ temp;
@@ -231,13 +244,16 @@ int aes_keyexpansion(const byte* key, word* w, size_t key_len) {
     return Nr;
 }
 
-// AES
+// AES 블록 암호화 함수
 void aes_encrypt(byte input[AES_BLOCK_SIZE], byte output[AES_BLOCK_SIZE], const word* w, int Nr) {
     byte state[4][4];
+    // 바이트 배열 -> 4x4 행렬 (열 우선) 변환
     for (int i = 0; i < AES_BLOCK_SIZE; i++) state[i % 4][i / 4] = input[i];
 
+    // 0. AddRoundKey
     aes_addroundkey(w, state, 0);
 
+    // 1. Nr-1 라운드 반복
     for (int round = 1; round < Nr; round++) {
         aes_subbytes(state);
         aes_shiftrows(state);
@@ -245,35 +261,42 @@ void aes_encrypt(byte input[AES_BLOCK_SIZE], byte output[AES_BLOCK_SIZE], const 
         aes_addroundkey(w, state, round);
     }
 
+    // 2. 마지막 라운드 (MixColumns 제외)
     aes_subbytes(state);
     aes_shiftrows(state);
     aes_addroundkey(w, state, Nr);
 
+    // 3. 4x4 행렬 -> 바이트 배열 변환 (열 우선)
     for (int i = 0; i < AES_BLOCK_SIZE; i++) output[i] = state[i % 4][i / 4];
 }
 
-
+// AES 블록 복호화 함수
 void aes_decrypt(byte input[AES_BLOCK_SIZE], byte output[AES_BLOCK_SIZE], const word* w, int Nr) {
     byte state[4][4];
+    // 바이트 배열 -> 4x4 행렬 (열 우선) 변환
     for (int i = 0; i < AES_BLOCK_SIZE; i++) state[i % 4][i / 4] = input[i];
 
+    // 0. 초기 AddRoundKey (마지막 라운드 키 사용)
     aes_addroundkey(w, state, Nr);
 
+    // 1. Nr-1 번의 역 라운드 반복
     for (int round = Nr - 1; round >= 1; round--) {
         aes_inv_shiftrows(state);
         aes_inv_subbytes(state);
-        aes_addroundkey(w, state, round);
+        aes_addroundkey(w, state, round); // 라운드 키 순서가 암호화와 반대
         aes_inv_mixcolumns(state);
     }
 
+    // 2. 마지막 역 라운드 (InvMixColumns 제외)
     aes_inv_shiftrows(state);
     aes_inv_subbytes(state);
-    aes_addroundkey(w, state, 0); 
+    aes_addroundkey(w, state, 0); // 초기 키(0번째 키) 사용
 
+    // 3. 4x4 행렬 -> 바이트 배열 변환
     for (int i = 0; i < AES_BLOCK_SIZE; i++) output[i] = state[i % 4][i / 4];
 }
 
-// CTR
+// CTR 모드 구현 (암호화와 복호화가 동일)
 void AES_CTR(const byte* input, byte* output, size_t length,
     const byte* key, const byte* nonce, size_t key_len) {
     word round_keys[60];
@@ -281,18 +304,22 @@ void AES_CTR(const byte* input, byte* output, size_t length,
     byte keystream[AES_BLOCK_SIZE];
     uint64_t counter = 0;
 
+    // 키 확장
     int Nr = aes_keyexpansion(key, round_keys, key_len);
-    if (Nr < 0) return; 
+    if (Nr < 0) return; // 유효하지 않은 키 길이
 
     size_t block_count = (length + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
     for (size_t i = 0; i < block_count; i++) {
         size_t offset = i * AES_BLOCK_SIZE;
         size_t block_len = (length - offset >= AES_BLOCK_SIZE) ? AES_BLOCK_SIZE : (length - offset);
 
+        // 1. 카운터 블록 구성 (Nonce + Counter)
         construct_counter_block(counter_block, nonce, counter);
 
+        // 2. 카운터 블록 암호화 -> 키스트림 생성
         aes_encrypt(counter_block, keystream, round_keys, Nr);
 
+        // 3. 키스트림과 평/암호문 XOR
         for (size_t j = 0; j < block_len; j++) {
             output[offset + j] = input[offset + j] ^ keystream[j];
         }
@@ -300,13 +327,16 @@ void AES_CTR(const byte* input, byte* output, size_t length,
     }
 }
 
-// ECB
+// ECB 모드 구현 (암호화/복호화 구분)
 void AES_ECB(const byte* input, byte* output, size_t length,
     const byte* key, size_t key_len, int encrypt) {
     word round_keys[60];
 
+    // 키 확장
     int Nr = aes_keyexpansion(key, round_keys, key_len);
-    if (Nr < 0) return; 
+    if (Nr < 0) return; // 유효하지 않은 키 길이
+
+    // 16바이트 블록 단위로 암호화/복호화
     size_t block_count = length / AES_BLOCK_SIZE;
     for (size_t i = 0; i < block_count; i++) {
         size_t offset = i * AES_BLOCK_SIZE;
@@ -318,13 +348,14 @@ void AES_ECB(const byte* input, byte* output, size_t length,
         }
     }
 
+    // 나머지 데이터가 16바이트 미만인 경우 (패딩 처리 그대로 복사)
     size_t remaining = length % AES_BLOCK_SIZE;
     if (remaining > 0) {
         memcpy(output + block_count * AES_BLOCK_SIZE, input + block_count * AES_BLOCK_SIZE, remaining);
     }
 }
 
-// CBC 
+// CBC 모드 구현 (암호화/복호화 구분)
 void AES_CBC(const byte* input, byte* output, size_t length,
     const byte* key, const byte* iv, size_t key_len, int encrypt) {
     word round_keys[60];
@@ -332,77 +363,225 @@ void AES_CBC(const byte* input, byte* output, size_t length,
     byte prev_block[AES_BLOCK_SIZE];
     byte current_block[AES_BLOCK_SIZE];
 
+    // 키 확장
     int Nr = aes_keyexpansion(key, round_keys, key_len);
-    if (Nr < 0) return; 
+    if (Nr < 0) return; // 유효하지 않은 키 길이
 
+    // IV를 이전 블록으로 초기화
     memcpy(prev_block, iv, AES_BLOCK_SIZE);
 
     size_t block_count = length / AES_BLOCK_SIZE;
 
     if (encrypt) {
+        // 암호화: 순방향 처리
         for (size_t i = 0; i < block_count; i++) {
             size_t offset = i * AES_BLOCK_SIZE;
 
+            // 평문과 이전 암호문을 XOR
             for (int j = 0; j < AES_BLOCK_SIZE; j++) {
                 block[j] = input[offset + j] ^ prev_block[j];
             }
+
+            // AES 암호화
             aes_encrypt(block, output + offset, round_keys, Nr);
+
+            // 현재 암호문을 다음 블록의 이전 블록으로 저장
             memcpy(prev_block, output + offset, AES_BLOCK_SIZE);
         }
     }
     else {
+        // 복호화: 역방향 처리
         for (size_t i = 0; i < block_count; i++) {
             size_t offset = i * AES_BLOCK_SIZE;
 
+            // 현재 암호문을 별도 저장 (복호화 후 필요)
             memcpy(current_block, input + offset, AES_BLOCK_SIZE);
 
+            // AES 복호화
             aes_decrypt((byte*)(input + offset), block, round_keys, Nr);
 
+            // 복호화된 결과와 이전 암호문을 XOR
             for (int j = 0; j < AES_BLOCK_SIZE; j++) {
                 output[offset + j] = block[j] ^ prev_block[j];
             }
 
+            // 현재 암호문을 다음 블록의 이전 블록으로 저장
             memcpy(prev_block, current_block, AES_BLOCK_SIZE);
         }
     }
 
+    // 나머지 데이터가 16바이트 미만인 경우 (패딩 처리 그대로 복사)
     size_t remaining = length % AES_BLOCK_SIZE;
     if (remaining > 0) {
         memcpy(output + block_count * AES_BLOCK_SIZE, input + block_count * AES_BLOCK_SIZE, remaining);
     }
 }
 
-// --- SHA-256 ---
+// --- SHA-256 구현 ---
 
-//static const uint32_t sha256_k[64] = {
-//}
+// SHA-256 상수 (처음 64개 소수의 세제곱근의 소수 부분)
+static const uint32_t sha256_k[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+};
 
-//static void sha256_transform(){
-//}
+// SHA-256 비트 회전 매크로
+#define SHA_ROTRIGHT(a,b) (((a) >> (b)) | ((a) << (32-(b))))
+#define SHA_CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
+#define SHA_MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define SHA_EP0(x) (SHA_ROTRIGHT(x,2) ^ SHA_ROTRIGHT(x,13) ^ SHA_ROTRIGHT(x,22))
+#define SHA_EP1(x) (SHA_ROTRIGHT(x,6) ^ SHA_ROTRIGHT(x,11) ^ SHA_ROTRIGHT(x,25))
+#define SHA_SIG0(x) (SHA_ROTRIGHT(x,7) ^ SHA_ROTRIGHT(x,18) ^ ((x) >> 3))
+#define SHA_SIG1(x) (SHA_ROTRIGHT(x,17) ^ SHA_ROTRIGHT(x,19) ^ ((x) >> 10))
 
-//void sha256_init(){
-//}
+// SHA-256 변환 함수
+static void sha256_transform(SHA256_CTX* ctx, const byte data[])
+{
+    uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
 
-//void sha256_update(){
-//}
+    // 메시지 스케줄 생성
+    for (i = 0, j = 0; i < 16; ++i, j += 4)
+        m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
+    for (; i < 64; ++i)
+        m[i] = SHA_SIG1(m[i - 2]) + m[i - 7] + SHA_SIG0(m[i - 15]) + m[i - 16];
 
-//void sha256_final(){
-//}
+    // 작업 변수 초기화
+    a = ctx->state[0];
+    b = ctx->state[1];
+    c = ctx->state[2];
+    d = ctx->state[3];
+    e = ctx->state[4];
+    f = ctx->state[5];
+    g = ctx->state[6];
+    h = ctx->state[7];
 
-//void sha256(){
-//}
+    // 64번의 변환 함수
+    for (i = 0; i < 64; ++i) {
+        t1 = h + SHA_EP1(e) + SHA_CH(e, f, g) + sha256_k[i] + m[i];
+        t2 = SHA_EP0(a) + SHA_MAJ(a, b, c);
+        h = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
+    }
+
+    // 추가 해시 값 계산
+    ctx->state[0] += a;
+    ctx->state[1] += b;
+    ctx->state[2] += c;
+    ctx->state[3] += d;
+    ctx->state[4] += e;
+    ctx->state[5] += f;
+    ctx->state[6] += g;
+    ctx->state[7] += h;
+}
+
+// SHA-256 초기화
+void sha256_init(SHA256_CTX* ctx)
+{
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x6a09e667;
+    ctx->state[1] = 0xbb67ae85;
+    ctx->state[2] = 0x3c6ef372;
+    ctx->state[3] = 0xa54ff53a;
+    ctx->state[4] = 0x510e527f;
+    ctx->state[5] = 0x9b05688c;
+    ctx->state[6] = 0x1f83d9ab;
+    ctx->state[7] = 0x5be0cd19;
+}
+
+// SHA-256 데이터 업데이트
+void sha256_update(SHA256_CTX* ctx, const byte data[], size_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; ++i) {
+        ctx->data[ctx->datalen] = data[i];
+        ctx->datalen++;
+        if (ctx->datalen == 64) {
+            sha256_transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+// SHA-256 최종 해시 계산
+void sha256_final(SHA256_CTX* ctx, byte hash[])
+{
+    uint32_t i;
+
+    i = ctx->datalen;
+
+    // 패딩
+    if (ctx->datalen < 56) {
+        ctx->data[i++] = 0x80;
+        while (i < 56)
+            ctx->data[i++] = 0x00;
+    }
+    else {
+        ctx->data[i++] = 0x80;
+        while (i < 64)
+            ctx->data[i++] = 0x00;
+        sha256_transform(ctx, ctx->data);
+        memset(ctx->data, 0, 56);
+    }
+
+    ctx->bitlen += ctx->datalen * 8;
+    ctx->data[63] = ctx->bitlen;
+    ctx->data[62] = ctx->bitlen >> 8;
+    ctx->data[61] = ctx->bitlen >> 16;
+    ctx->data[60] = ctx->bitlen >> 24;
+    ctx->data[59] = ctx->bitlen >> 32;
+    ctx->data[58] = ctx->bitlen >> 40;
+    ctx->data[57] = ctx->bitlen >> 48;
+    ctx->data[56] = ctx->bitlen >> 56;
+    sha256_transform(ctx, ctx->data);
 
 
+    for (i = 0; i < 4; ++i) {
+        hash[i] = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 4] = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 8] = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;
+        hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
+    }
+}
 
+// 한 번에 SHA-256 해시 계산
+void sha256(const byte data[], size_t len, byte hash[])
+{
+    SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, data, len);
+    sha256_final(&ctx, hash);
+}
+
+// 보안 키 생성 함수 정의
 int generate_secure_key(byte* key, size_t key_len) {
 #ifdef _WIN32
-    // Windows: BCryptGenRandom
+    // Windows: BCryptGenRandom 사용
     NTSTATUS status = BCryptGenRandom(NULL, key, (ULONG)key_len, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     if (!BCRYPT_SUCCESS(status)) {
         fprintf(stderr, "BCryptGenRandom failed with status: 0x%x\n", (unsigned int)status);
         return -1;
     }
 #else
+    // Linux, macOS 등 Unix 계열: /dev/urandom 사용
     FILE* fp = fopen("/dev/urandom", "rb");
     if (!fp) {
         perror("Failed to open /dev/urandom");

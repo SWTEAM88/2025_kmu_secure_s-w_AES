@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #endif
 
+// --- �Լ� ������Ÿ�� ���� ---
 void setup_console();
 void print_hex(const byte* data, size_t len);
 char* read_dynamic_line(const char* prompt);
@@ -19,6 +20,14 @@ void test_ecb(size_t key_len, int operation);
 void test_cbc(size_t key_len, int operation);
 void test_ctr(size_t key_len, int operation);
 void test_sha256();
+
+
+void setup_console() {
+#ifdef _WIN32
+    SetConsoleOutputCP(949);
+    SetConsoleCP(949);
+#endif
+}
 
 
 byte* hex_string_to_bytes(const char* hex_str, size_t* out_len) {
@@ -50,6 +59,7 @@ byte* hex_string_to_bytes(const char* hex_str, size_t* out_len) {
     return bytes;
 }
 
+// ��� �Լ�
 void print_hex(const byte* data, size_t len) {
     for (size_t i = 0; i < len; i++) {
         printf("%02X ", data[i]);
@@ -67,6 +77,7 @@ char* read_dynamic_line(const char* prompt) {
     size_t len = 0;
     int c;
 
+    // �Է� ���� ����
     while ((c = getchar()) != '\n' && c != EOF);
 
     printf("%s", prompt);
@@ -87,19 +98,43 @@ char* read_dynamic_line(const char* prompt) {
     return buffer;
 }
 
-// SHA-256 
+// SHA-256 �׽�Ʈ �Լ� (�⺻ ����)
 void test_sha256() {
     printf("\n========== SHA-256 Hash Function Test ==========\n\n");
-    printf("(SHA-256 Function not yet implemented.)\n");
+    
+    char* input = read_dynamic_line("Enter data to hash: ");
+    if (!input) {
+        fprintf(stderr, "Failed to read input\n");
+        return;
+    }
+    
+    size_t len = strlen(input);
+    byte hash[32]; // SHA-256 produces 32 bytes (256 bits)
+    
+    // SHA-256 해시 계산
+    sha256((byte*)input, len, hash);
+    
+    printf("Input: %s\n", input);
+    printf("SHA-256 Hash (HEX):\n");
+    print_hex(hash, 32);
+    printf("\n");
+    
+    free(input);
 }
 
-// ECB 
+// ECB ��� �׽�Ʈ �Լ�
 void test_ecb(size_t key_len, int operation) {
     printf("\n========== AES-ECB Mode Test (AES-%zu) ==========\n\n", key_len * 8);
     byte* key = malloc(key_len);
     if (!key) { fprintf(stderr, "Memory allocation failed\n"); return; }
-    for (size_t i = 0; i < key_len; i++) key[i] = (byte)(i + 1); // Test key
-    printf("Test Key:\n"); print_hex(key, key_len); printf("\n");
+
+    // ���� Ű ����
+    if (generate_secure_key(key, key_len) != 0) {
+        fprintf(stderr, "Failed to generate secure key\n");
+        free(key);
+        return;
+    }
+    printf("Generated Key:\n"); print_hex(key, key_len); printf("\n");
 
     if (operation == 1) { // Encryption
         char* plaintext_input = read_dynamic_line("Enter plaintext: ");
@@ -120,6 +155,22 @@ void test_ecb(size_t key_len, int operation) {
         free(plaintext_input); free(padded_pt); free(ciphertext);
     }
     else { // Decryption
+        // 복호화: 키를 사용자로부터 입력받기
+        char* key_hex = read_dynamic_line("Enter key (HEX): ");
+        if (!key_hex) { free(key); return; }
+        
+        size_t key_hex_len;
+        byte* key_bytes = hex_string_to_bytes(key_hex, &key_hex_len);
+        if (!key_bytes || key_hex_len != key_len) {
+            fprintf(stderr, "Invalid key length. Expected %zu bytes.\n", key_len);
+            free(key); free(key_hex);
+            if (key_bytes) free(key_bytes);
+            return;
+        }
+        memcpy(key, key_bytes, key_len);
+        free(key_hex); free(key_bytes);
+        printf("Using Key:\n"); print_hex(key, key_len); printf("\n");
+
         char* hex_input = read_dynamic_line("Enter ciphertext (HEX): ");
         if (!hex_input) { free(key); return; }
 
@@ -139,16 +190,27 @@ void test_ecb(size_t key_len, int operation) {
     free(key);
 }
 
-// CBC 
+// CBC ��� �׽�Ʈ �Լ� 
 void test_cbc(size_t key_len, int operation) {
     printf("\n========== AES-CBC Mode Test (AES-%zu) ==========\n\n", key_len * 8);
     byte* key = malloc(key_len);
     byte iv[16];
     if (!key) { fprintf(stderr, "Memory allocation failed\n"); return; }
-    for (size_t i = 0; i < key_len; i++) key[i] = (byte)(i + 1); // Test key
-    for (size_t i = 0; i < 16; i++) iv[i] = (byte)(i + 0x10);    // Test IV
-    printf("Test Key:\n"); print_hex(key, key_len);
-    printf("Test IV:\n"); print_hex(iv, 16); printf("\n");
+
+    // ���� Ű ����
+    if (generate_secure_key(key, key_len) != 0) {
+        fprintf(stderr, "Failed to generate secure key\n");
+        free(key);
+        return;
+    }
+    // ���� IV ����
+    if (generate_secure_key(iv, 16) != 0) {
+        fprintf(stderr, "Failed to generate secure IV\n");
+        free(key);
+        return;
+    }
+    printf("Generated Key:\n"); print_hex(key, key_len);
+    printf("Generated IV:\n"); print_hex(iv, 16); printf("\n");
 
     if (operation == 1) { // Encryption
         char* plaintext_input = read_dynamic_line("Enter plaintext: ");
@@ -168,6 +230,37 @@ void test_cbc(size_t key_len, int operation) {
         free(plaintext_input); free(padded_pt); free(ciphertext);
     }
     else { // Decryption
+        // 복호화: 키와 IV를 사용자로부터 입력받기
+        char* key_hex = read_dynamic_line("Enter key (HEX): ");
+        if (!key_hex) { free(key); return; }
+        
+        size_t key_hex_len;
+        byte* key_bytes = hex_string_to_bytes(key_hex, &key_hex_len);
+        if (!key_bytes || key_hex_len != key_len) {
+            fprintf(stderr, "Invalid key length. Expected %zu bytes.\n", key_len);
+            free(key); free(key_hex);
+            if (key_bytes) free(key_bytes);
+            return;
+        }
+        memcpy(key, key_bytes, key_len);
+        free(key_hex); free(key_bytes);
+        printf("Using Key:\n"); print_hex(key, key_len); printf("\n");
+
+        char* iv_hex = read_dynamic_line("Enter IV (HEX): ");
+        if (!iv_hex) { free(key); return; }
+        
+        size_t iv_hex_len;
+        byte* iv_bytes = hex_string_to_bytes(iv_hex, &iv_hex_len);
+        if (!iv_bytes || iv_hex_len != 16) {
+            fprintf(stderr, "Invalid IV length. Expected 16 bytes.\n");
+            free(key); free(iv_hex);
+            if (iv_bytes) free(iv_bytes);
+            return;
+        }
+        memcpy(iv, iv_bytes, 16);
+        free(iv_hex); free(iv_bytes);
+        printf("Using IV:\n"); print_hex(iv, 16); printf("\n");
+
         char* hex_input = read_dynamic_line("Enter ciphertext (HEX): ");
         if (!hex_input) { free(key); return; }
 
@@ -177,8 +270,8 @@ void test_cbc(size_t key_len, int operation) {
 
         byte* decrypted = malloc(cipher_len + 1);
 
-        AES_CBC(ciphertext, decrypted, cipher_len, key, iv, key_len, 0); // Decryption function call
-        decrypted[cipher_len] = '\0'; // Add null terminator
+        AES_CBC(ciphertext, decrypted, cipher_len, key, iv, key_len, 0);
+        decrypted[cipher_len] = '\0';
 
         printf("Decrypted text: %s\n", decrypted);
 
@@ -187,16 +280,27 @@ void test_cbc(size_t key_len, int operation) {
     free(key);
 }
 
-// CTR 
+// CTR ��� �׽�Ʈ �Լ� 
 void test_ctr(size_t key_len, int operation) {
     printf("\n========== AES-CTR Mode Test (AES-%zu) ==========\n\n", key_len * 8);
     byte* key = malloc(key_len);
     byte nonce[8];
     if (!key) { fprintf(stderr, "Memory allocation failed\n"); return; }
-    for (size_t i = 0; i < key_len; i++) key[i] = (byte)(i + 1); // Test key
-    for (size_t i = 0; i < 8; i++) nonce[i] = (byte)(i + 0x20); // Test Nonce
-    printf("Test Key:\n"); print_hex(key, key_len);
-    printf("Test Nonce:\n"); print_hex(nonce, 8); printf("\n");
+
+    // ���� Ű ����
+    if (generate_secure_key(key, key_len) != 0) {
+        fprintf(stderr, "Failed to generate secure key\n");
+        free(key);
+        return;
+    }
+    // ���� Nonce ����
+    if (generate_secure_key(nonce, 8) != 0) {
+        fprintf(stderr, "Failed to generate secure nonce\n");
+        free(key);
+        return;
+    }
+    printf("Generated Key:\n"); print_hex(key, key_len);
+    printf("Generated Nonce:\n"); print_hex(nonce, 8); printf("\n");
 
     if (operation == 1) { // Encryption
         char* plaintext_input = read_dynamic_line("Enter plaintext: ");
@@ -213,6 +317,37 @@ void test_ctr(size_t key_len, int operation) {
         free(plaintext_input); free(ciphertext);
     }
     else { // Decryption
+        // 복호화: 키와 Nonce를 사용자로부터 입력받기
+        char* key_hex = read_dynamic_line("Enter key (HEX): ");
+        if (!key_hex) { free(key); return; }
+        
+        size_t key_hex_len;
+        byte* key_bytes = hex_string_to_bytes(key_hex, &key_hex_len);
+        if (!key_bytes || key_hex_len != key_len) {
+            fprintf(stderr, "Invalid key length. Expected %zu bytes.\n", key_len);
+            free(key); free(key_hex);
+            if (key_bytes) free(key_bytes);
+            return;
+        }
+        memcpy(key, key_bytes, key_len);
+        free(key_hex); free(key_bytes);
+        printf("Using Key:\n"); print_hex(key, key_len); printf("\n");
+
+        char* nonce_hex = read_dynamic_line("Enter nonce (HEX): ");
+        if (!nonce_hex) { free(key); return; }
+        
+        size_t nonce_hex_len;
+        byte* nonce_bytes = hex_string_to_bytes(nonce_hex, &nonce_hex_len);
+        if (!nonce_bytes || nonce_hex_len != 8) {
+            fprintf(stderr, "Invalid nonce length. Expected 8 bytes.\n");
+            free(key); free(nonce_hex);
+            if (nonce_bytes) free(nonce_bytes);
+            return;
+        }
+        memcpy(nonce, nonce_bytes, 8);
+        free(nonce_hex); free(nonce_bytes);
+        printf("Using Nonce:\n"); print_hex(nonce, 8); printf("\n");
+
         char* hex_input = read_dynamic_line("Enter ciphertext (HEX): ");
         if (!hex_input) { free(key); return; }
 
@@ -222,7 +357,7 @@ void test_ctr(size_t key_len, int operation) {
 
         byte* decrypted = malloc(cipher_len + 1);
 
-        AES_CTR(ciphertext, decrypted, cipher_len, key, nonce, key_len); // Decryption function call
+        AES_CTR(ciphertext, decrypted, cipher_len, key, nonce, key_len);
         decrypted[cipher_len] = '\0';
 
         printf("Decrypted text: %s\n", decrypted);
@@ -232,7 +367,7 @@ void test_ctr(size_t key_len, int operation) {
     free(key);
 }
 
-// --- MAIN ---
+// --- MAIN �Լ� ---
 int main() {
     int op_choice = 0, mode_selection = 0, key_selection = 0;
     size_t key_len = 0;
